@@ -1,0 +1,39 @@
+CAMPUS VOICE - DEADLOCK DETECTION TEST CASES
+Run from os-module/ after building. Outputs below were produced by running the program.
+Resource types: A, B, C. Processes: P0..P4.
+
+=====================================================================
+TEST D1 - No deadlock (all processes can finish)
+Command:  ./campusvoice_os deadlock 1
+Available = [0 1 0]
+Allocation: P0 0 1 0 | P1 2 0 0 | P2 3 0 3 | P3 2 1 1 | P4 0 0 2
+Request   : P0 0 0 0 | P1 2 0 2 | P2 0 0 0 | P3 1 0 0 | P4 0 0 2
+
+Hand verification (Work starts as Available = [0 1 0]):
+  P0 request [0 0 0] <= Work            -> finishes, Work = [0 1 0]+[0 1 0] = [0 2 0]
+  P1 request [2 0 2] > [0 2 0]          -> skipped for now
+  P2 request [0 0 0] <= Work            -> finishes, Work = [0 2 0]+[3 0 3] = [3 2 3]
+  P3 request [1 0 0] <= [3 2 3]         -> finishes, Work = [3 2 3]+[2 1 1] = [5 3 4]
+  P4 request [0 0 2] <= [5 3 4]         -> finishes, Work = [5 3 4]+[0 0 2] = [5 3 6]
+  next pass: P1 request [2 0 2] <= [5 3 6] -> finishes, Work = [7 3 6]
+Expected: "RESULT: NO DEADLOCK - all processes can finish."  (finish order P0, P2, P3, P4, P1)
+
+=====================================================================
+TEST D2 - Deadlock
+Command:  ./campusvoice_os deadlock 2
+Same as D1 except P2 now REQUESTS [0 0 1].
+  P0 finishes -> Work = [0 2 0]
+  P1 needs [2 0 2] > Work; P2 needs [0 0 1] > Work (C = 0); P3 needs [1 0 0] > Work; P4 needs [0 0 2] > Work
+  No process can proceed.
+Expected: "RESULT: DEADLOCK DETECTED - 4 process(es) cannot finish: P1 P2 P3 P4"
+
+=====================================================================
+TEST D3 - Custom input from stdin (two processes waiting on each other)
+Command:  printf '2 2\n0 0\n1 0\n0 1\n0 1\n1 0\n' | ./campusvoice_os deadlock stdin
+Format: <n> <m> / Available / Allocation rows / Request rows
+  P0 holds R0 and wants R1; P1 holds R1 and wants R0; nothing is free.
+Expected: "RESULT: DEADLOCK DETECTED - 2 process(es) cannot finish: P0 P1"
+
+=====================================================================
+TEST D4 - Bad input
+  printf '0 0\n' | ./campusvoice_os deadlock stdin   -> "Input error: processes must be 1..10 and resource types 1..10"

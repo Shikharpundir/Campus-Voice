@@ -1,0 +1,82 @@
+CAMPUS VOICE - SCHEDULING TEST CASES
+Run from os-module/ after building. All "Expected" values below were produced by
+running the program AND checked by hand (calculations shown).
+Priority convention: smaller number = higher priority. Both algorithms are non-preemptive.
+Priority aging improves a job by one priority rank every 3 waiting days, down to rank 1.
+Formulas: turnaround = completion - arrival ; waiting = turnaround - burst
+
+=====================================================================
+TEST S1 - Built-in demo (5 tasks, different arrival/burst/priority)
+Command:  ./campusvoice_os sched-demo
+Input (pid complaint arrival burst priority):
+    1 101 0 5 3
+    2 102 1 3 1
+    3 103 2 8 4
+    4 104 3 2 2
+    5 105 6 4 1
+
+FCFS (order = arrival order)
+  Gantt: |P1 0-5|P2 5-8|P3 8-16|P4 16-18|P5 18-22|
+  PID  CT  TAT  WT
+  P1    5    5   0     (5-0, 5-5)
+  P2    8    7   4     (8-1, 7-3)
+  P3   16   14   6     (16-2, 14-8)
+  P4   18   15  13     (18-3, 15-2)
+  P5   22   16  12     (22-6, 16-4)
+  Average waiting    = (0+4+6+13+12)/5 = 35/5 = 7.00
+  Average turnaround = (5+7+14+15+16)/5 = 57/5 = 11.40
+
+PRIORITY WITH AGING
+  t=0 : only P1 has arrived -> P1 runs 0-5
+  t=5 : P2 effective 1, P3 effective 3, P4 effective 2; P2 runs 5-8
+  t=8 : P3 effective 2, P4 effective 1, P5 effective 1; P4 runs 8-10 (arrival tie-break)
+  t=10: P3 effective 2, P5 effective 1 -> P5 runs 10-14
+  t=14: P3 effective 1 -> P3 runs 14-22
+  Gantt: |P1 0-5|P2 5-8|P4 8-10|P5 10-14|P3 14-22|
+  PID  CT  TAT  WT
+  P1    5    5   0
+  P2    8    7   4
+  P3   22   20  12
+  P4   10    7   5
+  P5   14    8   4
+  Average waiting    = (0+4+12+5+4)/5 = 25/5 = 5.00
+  Average turnaround = (5+7+20+7+8)/5 = 47/5 = 9.40
+
+=====================================================================
+TEST S2 - CPU idle gap (nothing has arrived at time 0)
+Command:  printf '1 201 5 2 1\n2 202 6 1 1\n' | ./campusvoice_os sched fcfs
+Expected Gantt: | IDLE 0-5 | P1 5-7 | P2 7-8 |
+  P1: CT 7, TAT 2, WT 0     P2: CT 8, TAT 2, WT 1
+  Average waiting 0.50, average turnaround 2.00
+
+=====================================================================
+TEST S3 - Priority tie-breaking (all arrive at 0)
+Command:  printf '3 303 0 2 2\n1 301 0 4 2\n2 302 0 1 2\n4 304 0 3 1\n' | ./campusvoice_os sched priority
+Rule: lower effective priority number first; same rank -> earlier arrival; same arrival -> smaller pid.
+Expected order: P4 (priority 1) 0-3, then P1 3-7, P2 7-8, P3 8-10  (P1,P2,P3 tie -> pid order)
+  WT: P4 0, P1 3, P2 7, P3 8  -> average 4.50 ; TAT: 3,7,8,10 -> average 7.00
+
+=====================================================================
+TEST S4 - Non-preemption check
+Command:  printf '1 11 0 2 1\n2 12 0 8 4\n3 13 3 3 2\n' | ./campusvoice_os sched priority
+P2 starts at 2 and runs to 10. P3 (priority 2, better than P2) arrives at 3 but must wait.
+Expected: P1 0-2, P2 2-10, P3 10-13.  Average waiting 3.00, average turnaround 7.33
+
+=====================================================================
+TEST S5 - Invalid input is rejected (exit code 1, message on stderr)
+  printf '1 1 0 3\n'               | ./campusvoice_os sched fcfs   -> "line 1: expected 5 or 6 integers..."
+  printf '1 1 0 0 1\n'             | ./campusvoice_os sched fcfs   -> "P1: burst time must be > 0"
+  printf '1 1 0 3 1\n1 2 0 3 1\n'  | ./campusvoice_os sched fcfs   -> "line 2: duplicate pid 1"
+  printf ''                        | ./campusvoice_os sched fcfs   -> "no processes were provided"
+
+=====================================================================
+TEST S6 - Synchronization
+  ./campusvoice_os sync   -> Expected counter 200000, Actual 200000 (ALWAYS, mutex guarantees it)
+  ./campusvoice_os race   -> Actual is usually LESS than 200000 (we saw 129336 and 118973 on one machine).
+                            It is possible but NOT guaranteed on every run; the number differs each time.
+
+=====================================================================
+TEST S7 - Calendar-age input raises a low-priority complaint
+Command:  printf '1 701 0 1 4 6\n2 702 0 1 3 0\n' | ./campusvoice_os sched priority
+Expected: P1's LOW rank 4 ages to effective rank 2 (6 days); P2 is rank 3,
+          so P1 runs first. Output shows P1 effective priority 2.
