@@ -75,6 +75,8 @@ public class ComplaintService {
         public final String assignee;
         public final String createdAt;
         public final int ageDays;
+        public final Integer feedbackRating;
+        public final String feedbackComment;
         public final List<Attachment> attachments = new ArrayList<>();
 
         ComplaintDetails(ResultSet rs) throws SQLException {
@@ -89,6 +91,9 @@ public class ComplaintService {
             assignee = rs.getString("assigned");
             createdAt = rs.getString("created_at");
             ageDays = rs.getInt("age_days");
+            int rating = rs.getInt("feedback_rating");
+            feedbackRating = rs.wasNull() ? null : rating;
+            feedbackComment = rs.getString("feedback_comment");
         }
     }
 
@@ -441,12 +446,14 @@ public class ComplaintService {
         String sql = "SELECT c.complaint_id, c.title, c.description, c.location, c.priority, c.status, "
                 + "u.name AS student, d.department_name, "
                 + "COALESCE(a.name, CONCAT(global_admin.name, ' (Global admin)'), '-') AS assigned, c.created_at, "
-                + "DATEDIFF(CURRENT_DATE, DATE(c.created_at)) AS age_days "
+                + "DATEDIFF(CURRENT_DATE, DATE(c.created_at)) AS age_days, "
+                + "cf.rating AS feedback_rating, cf.feedback_comment "
                 + "FROM complaints c JOIN users u ON u.user_id = c.user_id "
                 + "JOIN departments d ON d.department_id = c.department_id "
                 + "LEFT JOIN users a ON a.user_id = c.assigned_to "
                 + "LEFT JOIN users global_admin ON global_admin.user_id = "
                 + "(SELECT MIN(admin.user_id) FROM users admin WHERE admin.role = 'ADMIN') "
+                + "LEFT JOIN complaint_feedback cf ON cf.complaint_id = c.complaint_id "
                 + "WHERE c.complaint_id = ? " + accessFilter;
         try (Connection con = DatabaseConnection.getConnection();
              PreparedStatement ps = con.prepareStatement(sql)) {
@@ -472,6 +479,63 @@ public class ComplaintService {
                 }
             }
             return details;
+        }
+    }
+
+    public void submitResolutionFeedback(int complaintId, UserAccount student, int rating, String comment)
+            throws SQLException {
+        validateFeedbackInput(rating, comment);
+        if (student == null || !"STUDENT".equals(student.role)) {
+            throw new IllegalArgumentException("Only the student who submitted the complaint can rate it.");
+        }
+
+        String normalizedComment = comment == null || comment.trim().isEmpty() ? null : comment.trim();
+        try (Connection con = DatabaseConnection.getConnection()) {
+            con.setAutoCommit(false);
+            try {
+                String status;
+                try (PreparedStatement ps = con.prepareStatement(
+                        "SELECT c.status FROM complaints c JOIN users u ON u.user_id = c.user_id "
+                                + "WHERE c.complaint_id = ? AND c.user_id = ? AND u.role = 'STUDENT' FOR UPDATE")) {
+                    ps.setInt(1, complaintId);
+                    ps.setInt(2, student.userId);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (!rs.next()) {
+                            throw new IllegalArgumentException(
+                                    "Complaint not found or you do not have access.");
+                        }
+                        status = rs.getString("status");
+                    }
+                }
+                if (!"RESOLVED".equals(status)) {
+                    throw new IllegalArgumentException("You can rate a complaint only after it is resolved.");
+                }
+
+                try (PreparedStatement ps = con.prepareStatement(
+                        "INSERT INTO complaint_feedback (complaint_id, rating, feedback_comment) "
+                                + "VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE "
+                                + "rating = ?, feedback_comment = ?, updated_at = CURRENT_TIMESTAMP")) {
+                    ps.setInt(1, complaintId);
+                    ps.setInt(2, rating);
+                    ps.setString(3, normalizedComment);
+                    ps.setInt(4, rating);
+                    ps.setString(5, normalizedComment);
+                    ps.executeUpdate();
+                }
+                con.commit();
+            } catch (SQLException | RuntimeException e) {
+                con.rollback();
+                throw e;
+            }
+        }
+    }
+
+    static void validateFeedbackInput(int rating, String comment) {
+        if (rating < 1 || rating > 5) {
+            throw new IllegalArgumentException("Rating must be between 1 and 5 stars.");
+        }
+        if (comment != null && comment.trim().length() > 1000) {
+            throw new IllegalArgumentException("Feedback comment cannot exceed 1000 characters.");
         }
     }
 

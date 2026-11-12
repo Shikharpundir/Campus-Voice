@@ -51,6 +51,7 @@ import javax.swing.JTable;
 import javax.swing.JSeparator;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
+import javax.swing.JToggleButton;
 import javax.swing.SwingWorker;
 import javax.swing.SwingConstants;
 import javax.swing.Timer;
@@ -58,6 +59,7 @@ import javax.swing.UIManager;
 import javax.swing.JDialog;
 import javax.swing.border.EmptyBorder;
 import javax.swing.filechooser.FileNameExtensionFilter;
+import javax.swing.ButtonGroup;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
 import javax.swing.table.JTableHeader;
@@ -100,6 +102,7 @@ public class CampusVoiceSwingApp extends JFrame {
     private final JLabel loginStatusLabel = new JLabel(" ");
 
     private JButton updateStatusButton;
+    private JButton rateResolutionButton;
     private JButton assignStaffButton;
     private JButton createStaffButton;
     private JButton listStaffButton;
@@ -291,6 +294,9 @@ public class CampusVoiceSwingApp extends JFrame {
         updateStatusButton = createStyledButton("Update Status", CARD_BG, TEXT_MAIN);
         updateStatusButton.addActionListener(e -> openStatusDialog());
 
+        rateResolutionButton = createStyledButton("Rate Resolution", CARD_BG, TEXT_MAIN);
+        rateResolutionButton.addActionListener(e -> openFeedbackDialog());
+
         assignStaffButton = createStyledButton("Assign Staff", CARD_BG, TEXT_MAIN);
         assignStaffButton.addActionListener(e -> openAssignmentDialog());
 
@@ -309,6 +315,7 @@ public class CampusVoiceSwingApp extends JFrame {
         controls.add(refresh);
         controls.add(submitComplaintButton);
         controls.add(details);
+        controls.add(rateResolutionButton);
         controls.add(updateStatusButton);
         controls.add(assignStaffButton);
         controls.add(createStaffButton);
@@ -475,6 +482,7 @@ public class CampusVoiceSwingApp extends JFrame {
         boolean student = "STUDENT".equals(currentUser.role);
         boolean staff = "STAFF".equals(currentUser.role);
         submitComplaintButton.setVisible(student);
+        rateResolutionButton.setVisible(student);
         runSchedulerButton.setVisible(admin);
         updateStatusButton.setVisible(admin || staff);
         assignStaffButton.setVisible(admin);
@@ -871,7 +879,10 @@ public class CampusVoiceSwingApp extends JFrame {
                             + "Department: " + details.department + " | Student: " + details.student + "\n"
                             + "Location: " + details.location + " | Assigned to: " + details.assignee + "\n"
                             + "Submitted: " + details.createdAt + " (" + details.ageDays + " days ago)\n\n"
-                            + "Description:\n" + details.description);
+                            + "Description:\n" + details.description
+                            + (details.feedbackRating == null ? "" : "\n\nStudent rating: "
+                                    + details.feedbackRating + "/5 stars"
+                                    + (details.feedbackComment == null ? "" : "\nFeedback: " + details.feedbackComment)));
             text.setEditable(false);
             text.setFont(FONT_MAIN);
             text.setLineWrap(true);
@@ -910,6 +921,77 @@ public class CampusVoiceSwingApp extends JFrame {
             JOptionPane.showMessageDialog(this, panel, "Complaint Details - #" + details.complaintId, JOptionPane.PLAIN_MESSAGE);
         } catch (SQLException | IllegalArgumentException ex) {
             setStatus("Could not load complaint details: " + ex.getMessage());
+        }
+    }
+
+    private void openFeedbackDialog() {
+        int selected = complaintTable.getSelectedRow();
+        if (selected < 0) {
+            setStatus("Select a resolved complaint to rate.");
+            return;
+        }
+        int modelRow = complaintTable.convertRowIndexToModel(selected);
+        int complaintId = Integer.parseInt(complaintTableModel.getValueAt(modelRow, 0).toString());
+        UserAccount student = session.currentUser();
+        try {
+            ComplaintService.ComplaintDetails details =
+                    complaintService.getComplaintDetails(complaintId, student);
+            if (!"RESOLVED".equals(details.status)) {
+                setStatus("You can rate a complaint only after it is resolved.");
+                return;
+            }
+
+            ButtonGroup ratings = new ButtonGroup();
+            JToggleButton[] stars = new JToggleButton[5];
+            JLabel selectedRating = new JLabel("Select a rating from 1 to 5 stars.");
+            JPanel ratingChoices = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+            for (int i = 0; i < stars.length; i++) {
+                final int rating = i + 1;
+                JToggleButton star = new JToggleButton("\u2605");
+                star.setFont(new Font("Segoe UI Symbol", Font.PLAIN, 26));
+                star.setForeground(new Color(245, 158, 11));
+                star.setToolTipText(rating + (rating == 1 ? " star" : " stars"));
+                star.getAccessibleContext().setAccessibleName(rating + (rating == 1 ? " star" : " stars"));
+                star.addActionListener(e -> selectedRating.setText("Selected: " + rating + "/5 stars"));
+                stars[i] = star;
+                ratings.add(star);
+                ratingChoices.add(star);
+            }
+            if (details.feedbackRating != null) {
+                stars[details.feedbackRating - 1].setSelected(true);
+                selectedRating.setText("Selected: " + details.feedbackRating + "/5 stars");
+            }
+
+            JTextArea feedbackComment = new JTextArea(5, 32);
+            feedbackComment.setLineWrap(true);
+            feedbackComment.setWrapStyleWord(true);
+            if (details.feedbackComment != null) feedbackComment.setText(details.feedbackComment);
+            JPanel feedbackPanel = new JPanel(new GridLayout(0, 1, 6, 6));
+            JPanel ratingPanel = new JPanel(new BorderLayout(0, 4));
+            ratingPanel.add(new JLabel("How was the resolution?"), BorderLayout.NORTH);
+            ratingPanel.add(ratingChoices, BorderLayout.CENTER);
+            ratingPanel.add(selectedRating, BorderLayout.SOUTH);
+            feedbackPanel.add(ratingPanel);
+            feedbackPanel.add(new JLabel("Optional comment (up to 1000 characters):"));
+            feedbackPanel.add(new JScrollPane(feedbackComment));
+
+            int result = JOptionPane.showConfirmDialog(this, feedbackPanel,
+                    "Rate Resolution - #" + complaintId, JOptionPane.OK_CANCEL_OPTION,
+                    JOptionPane.PLAIN_MESSAGE);
+            if (result != JOptionPane.OK_OPTION) return;
+            if (ratings.getSelection() == null) {
+                JOptionPane.showMessageDialog(this, "Select a star rating before saving.",
+                        "Rating required", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            int rating = 0;
+            for (int i = 0; i < stars.length; i++) {
+                if (stars[i].isSelected()) rating = i + 1;
+            }
+            complaintService.submitResolutionFeedback(complaintId, student, rating, feedbackComment.getText());
+            setStatus("Your resolution feedback was saved.");
+        } catch (SQLException | IllegalArgumentException ex) {
+            setStatus("Could not save resolution feedback: " + ex.getMessage());
         }
     }
 
