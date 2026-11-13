@@ -9,16 +9,18 @@ INSERT INTO departments (department_name) VALUES
  ('Hostel Administration'),-- 3
  ('Housekeeping'),         -- 4
  ('Library'),              -- 5
- ('Transport');            -- 6  (no complaints: demonstrates LEFT JOIN)
+ ('Transport'),            -- 6  (no complaints: demonstrates LEFT JOIN)
+ ('Custodial Supervisor'); -- 7  (separate department visible in complaint submission)
 
 INSERT INTO users (name, email, password_hash, role, department_id) VALUES
  ('Dr. Anita Rao',   'admin@campus.edu',   'dummyhash_admin',  'ADMIN',   NULL),-- 1, global admin
  ('Ravi Kumar',      'ravi.staff@campus.edu',  'dummyhash_s1', 'STAFF',   1),   -- 2, Maintenance
  ('Meena Joshi',     'meena.staff@campus.edu', 'dummyhash_s2', 'STAFF',   2),   -- 3, IT Services
- ('Parikshit Negi',  'parikshit@campus.edu',   'dummyhash_u1', 'STUDENT', NULL),-- 4
- ('Shikhar Pundir',  'shikhar@campus.edu',     'dummyhash_u2', 'STUDENT', NULL),-- 5
- ('Om Krishali',     'om@campus.edu',          'dummyhash_u3', 'STUDENT', NULL),-- 6
- ('Sameer Singh',    'sameer@campus.edu',      'dummyhash_u4', 'STUDENT', NULL);-- 7
+ ('Asha Verma',      'asha.supervisor@campus.edu', 'dummyhash_s3', 'STAFF', 7),   -- 4, Custodial Supervisor
+ ('Parikshit Negi',  'parikshit@campus.edu',   'dummyhash_u1', 'STUDENT', NULL),-- 5
+ ('Shikhar Pundir',  'shikhar@campus.edu',     'dummyhash_u2', 'STUDENT', NULL),-- 6
+ ('Om Krishali',     'om@campus.edu',          'dummyhash_u3', 'STUDENT', NULL),-- 7
+ ('Sameer Singh',    'sameer@campus.edu',      'dummyhash_u4', 'STUDENT', NULL);-- 8
 
 INSERT INTO complaints
  (user_id, department_id, title, description, location, priority, status, assigned_to, created_at, resolved_at)

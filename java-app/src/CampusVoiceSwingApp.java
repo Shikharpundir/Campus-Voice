@@ -1074,27 +1074,55 @@ public class CampusVoiceSwingApp extends JFrame {
         remarksArea.setLineWrap(true);
         remarksArea.setWrapStyleWord(true);
 
+        final File[] selectedAttachment = new File[1];
+        JLabel attachmentLabel = new JLabel("No image selected");
+        attachmentLabel.setFont(FONT_SMALL);
+        attachmentLabel.setForeground(TEXT_MUTED);
+        JButton attachmentButton = createStyledButton("Attach Image (optional)", CARD_BG, TEXT_MAIN);
+        attachmentButton.addActionListener(e -> {
+            selectedAttachment[0] = pickComplaintPhoto();
+            attachmentLabel.setText(selectedAttachment[0] == null ? "No image selected" : selectedAttachment[0].getName());
+        });
+        JPanel attachmentPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        attachmentPanel.add(attachmentButton);
+        attachmentPanel.add(attachmentLabel);
+
         Object[] fields = {
                 "Complaint ID", complaintIdField,
                 "New Status", statusCombo,
-                "Resolution Remarks", new JScrollPane(remarksArea)
+                "Resolution Remarks", new JScrollPane(remarksArea),
+                "Optional Evidence / Photo", attachmentPanel
         };
         int result = JOptionPane.showConfirmDialog(this, fields, "Update Complaint Status", JOptionPane.OK_CANCEL_OPTION);
         if (result != JOptionPane.OK_OPTION) return;
 
         try {
             int complaintId = Integer.parseInt(complaintIdField.getText().trim());
+            byte[] attachmentData = null;
+            String attachmentName = null;
+            String attachmentMime = null;
+            if (selectedAttachment[0] != null) {
+                if (selectedAttachment[0].length() > 10 * 1024 * 1024) {
+                    throw new IllegalArgumentException("Image must be 10 MB or smaller.");
+                }
+                attachmentData = Files.readAllBytes(selectedAttachment[0].toPath());
+                attachmentName = selectedAttachment[0].getName();
+                attachmentMime = imageMimeType(selectedAttachment[0]);
+            }
             String oldStatus = complaintService.updateStatus(
                     complaintId,
                     statusCombo.getSelectedItem().toString(),
                     currentUser,
-                    remarksArea.getText().trim());
+                    remarksArea.getText().trim(),
+                    attachmentName, attachmentMime, attachmentData);
             setStatus("Complaint #" + complaintId + " changed from " + oldStatus + " to " + statusCombo.getSelectedItem());
             refreshComplaintTable();
         } catch (NumberFormatException ex) {
             setStatus("Please enter a valid complaint ID.");
-        } catch (SQLException | IllegalArgumentException ex) {
+        } catch (SQLException | IOException ex) {
             setStatus("Status update failed: " + ex.getMessage());
+        } catch (IllegalArgumentException ex) {
+            setStatus(ex.getMessage());
         }
     }
 

@@ -546,6 +546,12 @@ public class ComplaintService {
      */
     public String updateStatus(int complaintId, String newStatus, UserAccount actor, String remarks)
             throws SQLException {
+        return updateStatus(complaintId, newStatus, actor, remarks, null, null, null);
+    }
+
+    public String updateStatus(int complaintId, String newStatus, UserAccount actor, String remarks,
+                              String attachmentName, String attachmentMime, byte[] attachmentData)
+            throws SQLException {
         if (actor == null) throw new IllegalArgumentException("Sign in is required.");
         String scope;
         if ("ADMIN".equals(actor.role)) {
@@ -562,6 +568,16 @@ public class ComplaintService {
         }
         if (!STATUSES.contains(newStatus)) {
             throw new IllegalArgumentException("Status must be one of " + STATUSES);
+        }
+        if (attachmentData != null) {
+            requireText(attachmentName, "Attachment filename", 255);
+            if (attachmentData.length == 0 || attachmentData.length > 10 * 1024 * 1024) {
+                throw new IllegalArgumentException("Image must be between 1 byte and 10 MB.");
+            }
+            if (!"image/jpeg".equals(attachmentMime) && !"image/png".equals(attachmentMime)
+                    && !"image/gif".equals(attachmentMime) && !"image/bmp".equals(attachmentMime)) {
+                throw new IllegalArgumentException("Only JPEG, PNG, GIF, or BMP images are supported.");
+            }
         }
         final String update =
                 "UPDATE complaints c SET status = ?, "
@@ -606,6 +622,17 @@ public class ComplaintService {
                     ps.setString(4, newStatus);
                     ps.setString(5, remarks == null || remarks.trim().isEmpty() ? null : remarks.trim());
                     ps.executeUpdate();
+                }
+                if (attachmentData != null) {
+                    try (PreparedStatement ps = con.prepareStatement(
+                            "INSERT INTO complaint_attachments (complaint_id, file_name, mime_type, file_data) "
+                                    + "VALUES (?, ?, ?, ?)")) {
+                        ps.setInt(1, complaintId);
+                        ps.setString(2, attachmentName);
+                        ps.setString(3, attachmentMime);
+                        ps.setBytes(4, attachmentData);
+                        ps.executeUpdate();
+                    }
                 }
                 con.commit();
                 return oldStatus;
