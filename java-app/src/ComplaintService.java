@@ -425,6 +425,35 @@ public class ComplaintService {
         }
     }
 
+    public void deleteComplaint(int complaintId, UserAccount actor) throws SQLException {
+        if (actor == null) throw new IllegalArgumentException("Sign in is required.");
+        final String sql;
+        if ("ADMIN".equals(actor.role)) {
+            requireAdmin(actor);
+            sql = "DELETE FROM complaints WHERE complaint_id = ? AND EXISTS "
+                    + "(SELECT 1 FROM users actor WHERE actor.user_id = ? "
+                    + "AND actor.role = 'ADMIN' AND actor.department_id IS NULL)";
+        } else if ("STUDENT".equals(actor.role)) {
+            sql = "DELETE FROM complaints WHERE complaint_id = ? AND user_id = ? AND EXISTS "
+                    + "(SELECT 1 FROM users actor WHERE actor.user_id = ? AND actor.role = 'STUDENT')";
+        } else {
+            throw new IllegalArgumentException("Only the complaint owner or global administrator can delete it.");
+        }
+        try (Connection con = DatabaseConnection.getConnection();
+             PreparedStatement ps = con.prepareStatement(sql)) {
+            ps.setInt(1, complaintId);
+            if ("ADMIN".equals(actor.role)) {
+                ps.setInt(2, actor.userId);
+            } else {
+                ps.setInt(2, actor.userId);
+                ps.setInt(3, actor.userId);
+            }
+            if (ps.executeUpdate() != 1) {
+                throw new IllegalArgumentException("Complaint not found or you do not have permission to delete it.");
+            }
+        }
+    }
+
     public ComplaintDetails getComplaintDetails(int complaintId, UserAccount account) throws SQLException {
         if (account == null) throw new IllegalArgumentException("Sign in is required.");
         String accessFilter;
