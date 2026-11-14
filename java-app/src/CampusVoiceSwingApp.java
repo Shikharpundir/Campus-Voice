@@ -87,6 +87,7 @@ public class CampusVoiceSwingApp extends JFrame {
     private static final Font FONT_SMALL = new Font("Segoe UI", Font.PLAIN, 11);
 
     private final ComplaintService complaintService = new ComplaintService();
+    private final StaffReportService staffReportService = new StaffReportService();
     private final OSModuleService osModule = new OSModuleService();
     private final JPanel cards = new JPanel(new CardLayout());
     private final JPanel loginPanel = new JPanel(new GridBagLayout());
@@ -107,6 +108,10 @@ public class CampusVoiceSwingApp extends JFrame {
     private JButton createStaffButton;
     private JButton listStaffButton;
     private JButton submitComplaintButton;
+    private JButton reportStaffButton;
+    private JButton myStaffReportsButton;
+    private JButton viewStaffReportsButton;
+    private JButton deleteComplaintButton;
     private JButton runSchedulerButton;
     private JButton runSyncDemoButton;
 
@@ -288,8 +293,20 @@ public class CampusVoiceSwingApp extends JFrame {
         submitComplaintButton = createStyledButton("+ Submit Complaint", PRIMARY_COLOR, Color.WHITE);
         submitComplaintButton.addActionListener(e -> openComplaintDialog());
 
+        reportStaffButton = createStyledButton("Report Staff", ACCENT_DANGER, Color.WHITE);
+        reportStaffButton.addActionListener(e -> openStaffReportDialog());
+
+        myStaffReportsButton = createStyledButton("My Staff Reports", CARD_BG, TEXT_MAIN);
+        myStaffReportsButton.addActionListener(e -> showStudentStaffReports());
+
+        viewStaffReportsButton = createStyledButton("Staff Reports", CARD_BG, TEXT_MAIN);
+        viewStaffReportsButton.addActionListener(e -> showAdminStaffReports());
+
         JButton details = createStyledButton("View Details", CARD_BG, TEXT_MAIN);
         details.addActionListener(e -> showSelectedComplaintDetails());
+
+        deleteComplaintButton = createStyledButton("Delete Complaint", CARD_BG, ACCENT_DANGER);
+        deleteComplaintButton.addActionListener(e -> deleteSelectedComplaint());
 
         updateStatusButton = createStyledButton("Update Status", CARD_BG, TEXT_MAIN);
         updateStatusButton.addActionListener(e -> openStatusDialog());
@@ -314,7 +331,11 @@ public class CampusVoiceSwingApp extends JFrame {
 
         controls.add(refresh);
         controls.add(submitComplaintButton);
+        controls.add(reportStaffButton);
+        controls.add(myStaffReportsButton);
+        controls.add(viewStaffReportsButton);
         controls.add(details);
+        controls.add(deleteComplaintButton);
         controls.add(rateResolutionButton);
         controls.add(updateStatusButton);
         controls.add(assignStaffButton);
@@ -482,6 +503,10 @@ public class CampusVoiceSwingApp extends JFrame {
         boolean student = "STUDENT".equals(currentUser.role);
         boolean staff = "STAFF".equals(currentUser.role);
         submitComplaintButton.setVisible(student);
+        reportStaffButton.setVisible(student);
+        myStaffReportsButton.setVisible(student);
+        viewStaffReportsButton.setVisible(admin);
+        deleteComplaintButton.setVisible(admin || student);
         rateResolutionButton.setVisible(student);
         runSchedulerButton.setVisible(admin);
         updateStatusButton.setVisible(admin || staff);
@@ -517,6 +542,30 @@ public class CampusVoiceSwingApp extends JFrame {
             }
         } catch (SQLException ex) {
             setStatus("Database error while loading complaints: " + ex.getMessage());
+        }
+    }
+
+    private void deleteSelectedComplaint() {
+        int selected = complaintTable.getSelectedRow();
+        if (selected < 0) {
+            setStatus("Select a complaint to delete.");
+            return;
+        }
+        int row = complaintTable.convertRowIndexToModel(selected);
+        int complaintId = Integer.parseInt(complaintTableModel.getValueAt(row, 0).toString());
+        String title = complaintTableModel.getValueAt(row, 1).toString();
+        int confirm = JOptionPane.showConfirmDialog(this,
+                "Permanently delete complaint #" + complaintId + " - " + title + "?\n"
+                        + "Its history, attachments, and feedback will also be deleted. "
+                        + "Any linked staff report will remain without this complaint link.",
+                "Delete Complaint", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+        if (confirm != JOptionPane.YES_OPTION) return;
+        try {
+            complaintService.deleteComplaint(complaintId, session.currentUser());
+            refreshComplaintTable();
+            setStatus("Complaint #" + complaintId + " deleted.");
+        } catch (SQLException | IllegalArgumentException ex) {
+            setStatus("Could not delete complaint: " + ex.getMessage());
         }
     }
 
@@ -725,6 +774,326 @@ public class CampusVoiceSwingApp extends JFrame {
     }
 
     private void openComplaintDialog() {
+        openComplaintDialogForm();
+    }
+
+        private void openStaffReportDialog() {
+            UserAccount student = session.currentUser();
+            if (student == null || !"STUDENT".equals(student.role)) {
+                setStatus("Only students can report staff members.");
+                return;
+            }
+
+            List<String[]> staff;
+            try {
+                staff = staffReportService.listReportableStaff(student);
+            } catch (SQLException ex) {
+                setStatus("Unable to load staff members: " + ex.getMessage());
+                return;
+            }
+            if (staff.isEmpty()) {
+                setStatus("There are no active staff accounts to report.");
+                return;
+            }
+
+            JComboBox<String> staffCombo = new JComboBox<>();
+            for (String[] member : staff) staffCombo.addItem(member[1] + " (" + member[2] + ")");
+            JComboBox<String> complaintCombo = new JComboBox<>();
+            List<String[]> linkedComplaints = new ArrayList<>();
+            Runnable refreshLinkedComplaints = () -> {
+                complaintCombo.removeAllItems();
+                complaintCombo.addItem("No linked complaint");
+                linkedComplaints.clear();
+                int index = staffCombo.getSelectedIndex();
+                if (index < 0) return;
+                try {
+                    linkedComplaints.addAll(staffReportService.listStudentComplaintsForStaff(
+                            student, Integer.parseInt(staff.get(index)[0])));
+                    for (String[] complaint : linkedComplaints) {
+                        complaintCombo.addItem("#" + complaint[0] + " - " + complaint[1]
+                                + " [" + complaint[2] + "]");
+                    }
+                } catch (SQLException ex) {
+                    setStatus("Unable to load your complaints for this staff member: " + ex.getMessage());
+                }
+            };
+            staffCombo.addActionListener(e -> refreshLinkedComplaints.run());
+            refreshLinkedComplaints.run();
+
+            String[] reasonLabels = {
+                    "Ignoring complaints", "Unnecessary delays", "Fake resolution", "Misconduct"
+            };
+            String[] reasonCodes = {
+                    "IGNORED_COMPLAINT", "UNNECESSARY_DELAY", "FAKE_RESOLUTION", "MISCONDUCT"
+            };
+            JComboBox<String> reasonCombo = new JComboBox<>(reasonLabels);
+            JTextArea description = new JTextArea(5, 32);
+            description.setFont(FONT_MAIN);
+            description.setLineWrap(true);
+            description.setWrapStyleWord(true);
+            final File[] evidence = new File[1];
+            JLabel evidenceLabel = new JLabel("No evidence image selected");
+            evidenceLabel.setFont(FONT_SMALL);
+            JButton chooseEvidence = createStyledButton("Choose Evidence Image...", CARD_BG, TEXT_MAIN);
+            chooseEvidence.addActionListener(e -> {
+                JFileChooser chooser = new JFileChooser();
+                chooser.setDialogTitle("Select Report Evidence");
+                chooser.setFileFilter(new FileNameExtensionFilter(
+                        "Images (*.jpg, *.png, *.gif, *.bmp)", "jpg", "jpeg", "png", "bmp", "gif"));
+                if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+                    evidence[0] = chooser.getSelectedFile();
+                    evidenceLabel.setText(evidence[0].getName());
+                }
+            });
+            JPanel evidencePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+            evidencePanel.add(chooseEvidence);
+            evidencePanel.add(evidenceLabel);
+            Object[] fields = {
+                    "Staff member", staffCombo,
+                    "Related complaint (optional)", complaintCombo,
+                    "Reason", reasonCombo,
+                    "Description", new JScrollPane(description),
+                    "Evidence (optional, image up to 10 MB)", evidencePanel
+            };
+            int result = JOptionPane.showConfirmDialog(this, fields, "Report Staff Member",
+                    JOptionPane.OK_CANCEL_OPTION);
+            if (result != JOptionPane.OK_OPTION) return;
+
+            try {
+                int staffIndex = staffCombo.getSelectedIndex();
+                if (staffIndex < 0) throw new IllegalArgumentException("Select a staff member.");
+                Integer complaintId = null;
+                int complaintIndex = complaintCombo.getSelectedIndex();
+                if (complaintIndex > 0) {
+                    complaintId = Integer.parseInt(linkedComplaints.get(complaintIndex - 1)[0]);
+                }
+                byte[] evidenceData = null;
+                String evidenceName = null;
+                String evidenceMime = null;
+                if (evidence[0] != null) {
+                    if (evidence[0].length() > 10 * 1024 * 1024) {
+                        throw new IllegalArgumentException("Evidence image must be 10 MB or smaller.");
+                    }
+                    evidenceData = Files.readAllBytes(evidence[0].toPath());
+                    evidenceName = evidence[0].getName();
+                    evidenceMime = imageMimeType(evidence[0]);
+                }
+                int reportId = staffReportService.submitReport(student,
+                        Integer.parseInt(staff.get(staffIndex)[0]), complaintId,
+                        reasonCodes[reasonCombo.getSelectedIndex()], description.getText(),
+                        evidenceName, evidenceMime, evidenceData);
+                setStatus("Staff report submitted to the global administrator. Report ID: #" + reportId);
+            } catch (SQLException | IOException ex) {
+                setStatus("Staff report submission failed: " + ex.getMessage());
+            } catch (IllegalArgumentException ex) {
+                setStatus(ex.getMessage());
+            }
+        }
+
+        private void showStudentStaffReports() {
+            UserAccount student = session.currentUser();
+            if (student == null || !"STUDENT".equals(student.role)) {
+                setStatus("Only students can view their staff reports.");
+                return;
+            }
+            try {
+                List<String[]> reports = staffReportService.listOwnReports(student);
+                List<String[]> studentRows = new ArrayList<>();
+                for (String[] report : reports) {
+                    studentRows.add(new String[] {report[0], report[1], report[3], formatReportReason(report[4]),
+                            report[5], report[7]});
+                }
+                DefaultTableModel model = readOnlyTableModel(
+                        new String[] {"ID", "Submitted", "Staff", "Reason", "Status", "Admin update"}, studentRows);
+                JTable table = new JTable(model);
+                table.setRowHeight(28);
+                table.getColumnModel().getColumn(5).setPreferredWidth(260);
+                Object[] actions = {"View Selected", "Delete Selected", "Close"};
+                int choice = JOptionPane.showOptionDialog(this, new JScrollPane(table),
+                        "My Staff Reports", JOptionPane.DEFAULT_OPTION, JOptionPane.INFORMATION_MESSAGE,
+                        null, actions, actions[0]);
+                if (choice == 0 && table.getSelectedRow() >= 0) {
+                    int row = table.convertRowIndexToModel(table.getSelectedRow());
+                    int reportId = Integer.parseInt(model.getValueAt(row, 0).toString());
+                    showStaffReportDetails(reportId, student, false);
+                } else if (choice == 1 && table.getSelectedRow() >= 0) {
+                    int row = table.convertRowIndexToModel(table.getSelectedRow());
+                    deleteStaffReport(Integer.parseInt(model.getValueAt(row, 0).toString()), student);
+                } else if (choice == 0 || choice == 1) {
+                    setStatus("Select a staff report first.");
+                } else if (choice >= 0) {
+                    setStatus(reports.isEmpty() ? "You have not submitted any staff reports."
+                            : "Showing " + reports.size() + " staff report(s). Admin updates appear in this list.");
+                }
+            } catch (SQLException ex) {
+                setStatus("Unable to load your staff reports: " + ex.getMessage());
+            } catch (IllegalArgumentException ex) {
+                setStatus(ex.getMessage());
+            }
+        }
+
+        private void showAdminStaffReports() {
+            UserAccount admin = session.currentUser();
+            if (admin == null || !"ADMIN".equals(admin.role)) {
+                setStatus("Only the global administrator can review staff reports.");
+                return;
+            }
+            try {
+                List<String[]> reports = staffReportService.listReportsForAdmin(admin);
+                List<String[]> adminRows = new ArrayList<>();
+                for (String[] report : reports) {
+                    String[] row = report.clone();
+                    row[4] = formatReportReason(row[4]);
+                    adminRows.add(row);
+                }
+                DefaultTableModel model = readOnlyTableModel(
+                        new String[] {"ID", "Submitted", "Student", "Staff", "Reason", "Status",
+                                "Related complaint", "Student update"}, adminRows);
+                JTable table = new JTable(model);
+                table.setRowHeight(28);
+                table.getColumnModel().getColumn(7).setPreferredWidth(260);
+                Object[] actions = {"Investigate Selected", "Delete Selected", "Close"};
+                int choice = JOptionPane.showOptionDialog(this, new JScrollPane(table),
+                        "Admin Dashboard - Staff Reports", JOptionPane.DEFAULT_OPTION,
+                        JOptionPane.INFORMATION_MESSAGE, null, actions, actions[0]);
+                if (choice == 0 && table.getSelectedRow() >= 0) {
+                    int row = table.convertRowIndexToModel(table.getSelectedRow());
+                    int reportId = Integer.parseInt(model.getValueAt(row, 0).toString());
+                    showStaffReportDetails(reportId, admin, true);
+                } else if (choice == 1 && table.getSelectedRow() >= 0) {
+                    int row = table.convertRowIndexToModel(table.getSelectedRow());
+                    deleteStaffReport(Integer.parseInt(model.getValueAt(row, 0).toString()), admin);
+                } else if (choice == 0 || choice == 1) {
+                    setStatus("Select a staff report first.");
+                } else if (choice >= 0) {
+                    setStatus(reports.isEmpty() ? "No staff reports have been filed."
+                            : "Loaded " + reports.size() + " staff report(s) for the administrator.");
+                }
+            } catch (SQLException ex) {
+                setStatus("Unable to load staff reports: " + ex.getMessage());
+            } catch (IllegalArgumentException ex) {
+                setStatus(ex.getMessage());
+            }
+        }
+
+        private void deleteStaffReport(int reportId, UserAccount actor) {
+            int confirm = JOptionPane.showConfirmDialog(this,
+                    "Permanently delete staff report #" + reportId + " and its evidence?",
+                    "Delete Staff Report", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+            if (confirm != JOptionPane.YES_OPTION) return;
+            try {
+                staffReportService.deleteReport(reportId, actor);
+                setStatus("Staff report #" + reportId + " deleted.");
+            } catch (SQLException | IllegalArgumentException ex) {
+                setStatus("Could not delete staff report: " + ex.getMessage());
+            }
+        }
+
+        private DefaultTableModel readOnlyTableModel(String[] columns, List<String[]> rows) {
+            DefaultTableModel model = new DefaultTableModel(columns, 0) {
+                private static final long serialVersionUID = 1L;
+                @Override
+                public boolean isCellEditable(int row, int column) { return false; }
+            };
+            for (String[] row : rows) model.addRow(row);
+            return model;
+        }
+
+        private String formatReportReason(String reason) {
+            switch (reason) {
+                case "IGNORED_COMPLAINT": return "Ignoring complaints";
+                case "UNNECESSARY_DELAY": return "Unnecessary delays";
+                case "FAKE_RESOLUTION": return "Fake resolution";
+                case "MISCONDUCT": return "Misconduct";
+                default: return reason;
+            }
+        }
+
+        private void showStaffReportDetails(int reportId, UserAccount viewer, boolean adminView) {
+            try {
+                StaffReportService.ReportDetails report =
+                        staffReportService.getReportDetails(reportId, viewer);
+                JTextArea reportText = new JTextArea(
+                        "Report #" + report.reportId + " - " + report.reason + "\n"
+                                + "Status: " + report.status + " | Submitted: " + report.createdAt + "\n"
+                                + "Student: " + report.student + " | Staff member: " + report.staff + "\n"
+                                + "Related complaint: " + (report.complaintId == null ? "None"
+                                : "#" + report.complaintId + " - " + report.complaintTitle) + "\n\n"
+                                + report.description);
+                reportText.setEditable(false);
+                reportText.setLineWrap(true);
+                reportText.setWrapStyleWord(true);
+                reportText.setRows(8);
+                JPanel detailsPanel = new JPanel();
+                detailsPanel.setLayout(new javax.swing.BoxLayout(detailsPanel, javax.swing.BoxLayout.Y_AXIS));
+                detailsPanel.add(new JScrollPane(reportText));
+                if (report.evidence != null) {
+                    JLabel evidencePreview = new JLabel("Evidence: " + report.evidence.fileName);
+                    evidencePreview.setHorizontalAlignment(SwingConstants.CENTER);
+                    evidencePreview.setPreferredSize(new Dimension(360, 240));
+                    showAttachmentPreview(report.evidence, evidencePreview);
+                    detailsPanel.add(evidencePreview);
+                } else {
+                    detailsPanel.add(new JLabel("No evidence image attached."));
+                }
+
+                if (!adminView) {
+                    String response = report.adminResponse == null || report.adminResponse.trim().isEmpty()
+                            ? "The administrator has not posted an update yet."
+                            : "Administrator update: " + report.adminResponse;
+                    detailsPanel.add(new JLabel(response));
+                    JOptionPane.showMessageDialog(this, detailsPanel, "Staff Report Details",
+                            JOptionPane.INFORMATION_MESSAGE);
+                    return;
+                }
+
+                JComboBox<String> statusCombo = new JComboBox<>(
+                        new String[] {"SUBMITTED", "UNDER_REVIEW", "ACTION_TAKEN", "CLOSED"});
+                statusCombo.setSelectedItem(report.status);
+                JTextArea responseArea = new JTextArea(report.adminResponse == null ? "" : report.adminResponse, 3, 32);
+                responseArea.setLineWrap(true);
+                responseArea.setWrapStyleWord(true);
+                detailsPanel.add(new JLabel("Report status"));
+                detailsPanel.add(statusCombo);
+                detailsPanel.add(new JLabel("Update for student (required; visible in My Staff Reports)"));
+                detailsPanel.add(new JScrollPane(responseArea));
+                Object[] options = report.complaintId == null
+                        ? new Object[] {"Save Update", "Close"}
+                        : new Object[] {"Save Update", "Reassign Complaint", "Close"};
+                int choice = JOptionPane.showOptionDialog(this, detailsPanel, "Admin - Investigate Staff Report",
+                        JOptionPane.DEFAULT_OPTION, JOptionPane.INFORMATION_MESSAGE, null, options, options[0]);
+                if (choice == 0) {
+                    staffReportService.updateReport(reportId, statusCombo.getSelectedItem().toString(),
+                            responseArea.getText(), viewer);
+                    setStatus("Staff report updated; the student can see the administrator's update.");
+                } else if (choice == 1 && report.complaintId != null) {
+                    reassignReportComplaint(report.complaintId, viewer);
+                }
+            } catch (SQLException ex) {
+                setStatus("Unable to open staff report: " + ex.getMessage());
+            } catch (IllegalArgumentException ex) {
+                setStatus(ex.getMessage());
+            }
+        }
+
+        private void reassignReportComplaint(int complaintId, UserAccount admin) throws SQLException {
+            List<String[]> staff = complaintService.listStaffForComplaint(complaintId, admin);
+            if (staff.isEmpty()) {
+                setStatus("No staff are available in the linked complaint's department.");
+                return;
+            }
+            String[] labels = new String[staff.size()];
+            for (int i = 0; i < staff.size(); i++) labels[i] = staff.get(i)[1] + " (" + staff.get(i)[2] + ")";
+            int selected = JOptionPane.showOptionDialog(this, "Choose a new assignee for complaint #"
+                            + complaintId, "Reassign Complaint", JOptionPane.DEFAULT_OPTION,
+                    JOptionPane.QUESTION_MESSAGE, null, labels, labels[0]);
+            if (selected < 0) return;
+            complaintService.assignComplaint(complaintId, Integer.parseInt(staff.get(selected)[0]), admin);
+            setStatus("Complaint #" + complaintId + " reassigned from the staff report.");
+            refreshComplaintTable();
+        }
+
+    private void openComplaintDialogForm() {
         UserAccount currentUser = session.currentUser();
         if (currentUser == null || !"STUDENT".equals(currentUser.role)) {
             setStatus("Please sign in first.");
