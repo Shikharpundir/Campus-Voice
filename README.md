@@ -119,6 +119,7 @@ OS-related modules can include:
 * FCFS
 * Round Robin
 * Synchronization
+* Bounded-buffer producer/consumer synchronization
 * Resource management
 * Deadlock-related simulations
 

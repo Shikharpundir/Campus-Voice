@@ -3,8 +3,10 @@
 ## Prerequisites
 * JDK 11+ (compiled and syntax-checked with the JDK available in the build sandbox)
 * MySQL 8.0.16+ with `database/schema.sql` and `sample_data.sql` loaded
-  (for an existing database, run `database/migrate_global_admin_staff_departments.sql`
-  and `database/migrate_complaint_attachments.sql` once each instead of recreating it)
+  (for an existing database, run `database/migrate_global_admin_staff_departments.sql`,
+  `database/migrate_complaint_attachments.sql`, `database/migrate_complaint_feedback.sql`,
+  `database/migrate_staff_reports.sql`, and `database/migrate_complaint_votes.sql`
+  once each instead of recreating it)
 * MySQL Connector/J jar (download from the MySQL website), e.g. `lib/mysql-connector-j-8.x.x.jar`
 * The C executable built in `../os-module` (see root README)
 
@@ -49,15 +51,13 @@ with `PreparedStatement`. `UserSession` holds the signed-in account until logout
 `validateUser(email, password)` returns the role and staff department after password-hash
 verification. Students are routed to their own-complaints view and may submit to a selected
 department. The single global admin sees all departments and can assign a complaint only to
-staff belonging to that complaint's department. The admin creates pending staff records
-with a name and email. On first-time setup, the staff member enters the same name/email,
-creates a password, and selects a department; both values are saved to the account. Future
-sign-ins use email/password and go directly to the staff portal. Staff see and update only
-complaints assigned to their account. These access rules are checked in service queries and mutations, not only
-in the UI. Until staff is assigned, student complaint views display the global admin as the
-routed recipient.
-
-The DAO exposes `getComplaintsByDepartment(String dept)` for explicit department queries,
+staff belonging to that complaint's department. The admin creates pending staff records with
+a name and email. On first-time setup, the staff member enters the same name/email, creates
+a password, and selects a department; both values are saved to the account. Future sign-ins
+use email/password and go directly to the staff portal. Staff see and update only complaints
+assigned to their account. These access rules are checked in service queries and mutations, not
+only in the UI. Until staff is assigned, student complaint views display the global admin as the
+routed recipient.The DAO exposes `getComplaintsByDepartment(String dept)` for explicit department queries,
 `getComplaintsForAdmin(...)` for the global admin queue, and
 `createComplaint(Complaint c)` for complaint creation with its initial history row in one
 transaction. Staff selection derives the department from the complaint record, and the
@@ -66,12 +66,21 @@ assignment transaction verifies the staff member's department again before savin
 ## Menu
 * Students, the global admin, and staff use the same sign-in form; the app routes each account by its database role.
 * Students can submit complaints from the Swing dashboard, optionally adding a photo from the system camera or image chooser. Images up to 10 MB are stored in the `complaint_attachments` table as image data, not in the complaint text.
-* Students can view only their own complaint history/status.
+* Students can search the shared open-report queue by report ID, title/type, or department,
+  add a description when submitting a complaint, and upvote an existing issue once.
+  Every 5 upvotes promote an open complaint by one priority level, capped at URGENT;
+  exact open duplicates for the same department and location are rejected with the existing report ID.
+* Students can rate each resolved complaint from 1 to 5 stars and optionally add or edit a comment. Authorized administrators and assigned staff can see submitted feedback in complaint details.
+* Students can report active staff members for ignored complaints, unnecessary delays, fake resolutions, or misconduct, optionally linking one of their complaints assigned to that staff member and attaching an image (up to 10 MB).
+* Staff reports are visible only to the reporting student and the global administrator. Students can track report status and administrator updates under **My Staff Reports**; only the administrator can review evidence, update report status, leave a student-facing update, and reassign a linked complaint. Staff have no report access.
+* Students can permanently delete their own complaints and staff reports; the global administrator can delete any. Deletion requires confirmation. Complaint history, attachments, and feedback are deleted with a complaint; a linked staff report remains with its complaint reference cleared.
 * Double-click a complaint or select it and use **Complaint details / image** to see its complete details and attachment preview.
 * The global administrator can assign open complaints across all departments, but only to staff belonging to the complaint's department. Staff can sign in to view and update only complaints assigned to their own account. Status changes and history entries are committed atomically.
 * The global admin can create multiple pending staff logins with **Add Department Staff** by entering each staff member's name and email. Staff complete first-time setup by confirming that name/email, creating a password, and selecting a department.
 * The scheduler panel runs priority scheduling with aging. Every three waiting days, effective priority improves one rank, up to URGENT. Age and effective priority are recalculated from `created_at`; a daily Swing refresh updates the dashboard automatically. The C scheduler also applies aging to accumulated real and simulated wait time.
-* **Run Mutex / Race Demo** launches the C synchronization module from the Swing dashboard. Choose the mutex-protected or unprotected shared-counter run, then compare expected and actual updates in **OS Module Output**. This is an educational concurrency demo; it does not modify complaint or database records.
+* **Run Mutex / Buffer Demo** launches the C synchronization module from the Swing dashboard.
+  Choose the mutex, race-condition, or bounded-buffer producer/consumer run and compare the
+  output in **OS Module Output**. These are educational demos; they do not modify complaint records.
 * Students can register from the login screen using their name, institutional email, and a password. The global administrator can use **View Staff Accounts** to see staff names, emails, departments, and whether first-time setup is pending or complete. The global administrator has a `NULL` `department_id`; pending staff have `NULL` password and department values until first-time setup.
 * Existing sample-data accounts have placeholder passwords and cannot sign in. Register a real account with a new email address.
 
@@ -113,6 +122,8 @@ javac -cp "out;lib\*" -d out test\PasswordUtilTest.java test\UserSessionTest.jav
 java -cp "out;lib\*" PasswordUtilTest
 java -cp "out;lib\*" UserSessionTest
 java -cp "out;lib\*" ComplaintAgingTest
+javac -cp "out;lib\*" -d out test\StaffReportValidationTest.java
+java -cp "out;lib\*" StaffReportValidationTest
 ```
 
 ## Java ↔ C protocol

@@ -77,6 +77,7 @@ public class ComplaintService {
         public final int ageDays;
         public final Integer feedbackRating;
         public final String feedbackComment;
+        public final int upvotes;
         public final List<Attachment> attachments = new ArrayList<>();
 
         ComplaintDetails(ResultSet rs) throws SQLException {
@@ -94,6 +95,7 @@ public class ComplaintService {
             int rating = rs.getInt("feedback_rating");
             feedbackRating = rs.wasNull() ? null : rating;
             feedbackComment = rs.getString("feedback_comment");
+            upvotes = rs.getInt("upvotes");
         }
     }
 
@@ -198,6 +200,7 @@ public class ComplaintService {
             }
         }
         if (attachmentData == null) {
+            rejectDuplicateComplaint(departmentId, title, location);
             return dao.createComplaint(new Complaint(userId, departmentId, title, description, location, priority));
         }
 
@@ -211,6 +214,7 @@ public class ComplaintService {
         try (Connection con = DatabaseConnection.getConnection()) {
             con.setAutoCommit(false);                       // start transaction
             try {
+                rejectDuplicateComplaint(con, departmentId, title, location);
                 try (PreparedStatement ps = con.prepareStatement(
                         "SELECT role FROM users WHERE user_id = ?")) {
                     ps.setInt(1, userId);
@@ -218,6 +222,7 @@ public class ComplaintService {
                         if (!rs.next() || !"STUDENT".equals(rs.getString("role"))) {
                             throw new IllegalArgumentException("Only a student can submit a complaint.");
                         }
+
                     }
                 }
                 int complaintId;
@@ -255,6 +260,31 @@ public class ComplaintService {
             } catch (SQLException | RuntimeException e) {
                 con.rollback();                             // undo everything if any step failed
                 throw e;
+            }
+        }
+    }
+
+    private void rejectDuplicateComplaint(int departmentId, String title, String location)
+            throws SQLException {
+        try (Connection con = DatabaseConnection.getConnection()) {
+            rejectDuplicateComplaint(con, departmentId, title, location);
+        }
+    }
+
+    private void rejectDuplicateComplaint(Connection con, int departmentId, String title, String location)
+            throws SQLException {
+        try (PreparedStatement ps = con.prepareStatement(
+                "SELECT complaint_id FROM complaints WHERE department_id = ? "
+                        + "AND LOWER(title) = LOWER(?) AND LOWER(location) = LOWER(?) "
+                        + "AND status IN ('PENDING','IN_PROGRESS') LIMIT 1")) {
+            ps.setInt(1, departmentId);
+            ps.setString(2, title.trim());
+            ps.setString(3, location.trim());
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    throw new IllegalArgumentException("A matching open complaint already exists (ID #"
+                            + rs.getInt("complaint_id") + "). Upvote it instead of submitting a duplicate.");
+                }
             }
         }
     }
@@ -306,6 +336,7 @@ public class ComplaintService {
         String sql =
                 "SELECT c.complaint_id, c.title, c.priority, c.status, u.name AS student, "
                 + "d.department_name, COALESCE(a.name, CONCAT(global_admin.name, ' (Global admin)'), '-') AS assigned, "
+                + "COALESCE(v.vote_count, 0) AS upvotes, "
                 + "DATEDIFF(CURRENT_DATE, DATE(c.created_at)) AS age_days "
                 + "FROM complaints c "
                 + "INNER JOIN users u ON u.user_id = c.user_id "
@@ -313,21 +344,23 @@ public class ComplaintService {
                 + "LEFT JOIN users a ON a.user_id = c.assigned_to "
                 + "LEFT JOIN users global_admin ON global_admin.user_id = "
                 + "(SELECT MIN(admin.user_id) FROM users admin WHERE admin.role = 'ADMIN') "
-                + "WHERE c.user_id = ? AND EXISTS "
+                + "LEFT JOIN (SELECT complaint_id, COUNT(*) AS vote_count FROM complaint_votes GROUP BY complaint_id) v "
+                + "ON v.complaint_id = c.complaint_id "
+                + "WHERE c.status <> 'REJECTED' AND EXISTS "
                 + "(SELECT 1 FROM users actor WHERE actor.user_id = ? AND actor.role = 'STUDENT') "
                 + "ORDER BY c.complaint_id";
         List<String[]> rows = new ArrayList<>();
         try (Connection con = DatabaseConnection.getConnection();
              PreparedStatement ps = con.prepareStatement(sql)) {
             ps.setInt(1, account.userId);
-            ps.setInt(2, account.userId);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     rows.add(new String[] {
                             String.valueOf(rs.getInt("complaint_id")), rs.getString("title"),
                             rs.getString("priority"), rs.getString("status"),
                             rs.getString("student"), rs.getString("department_name"),
-                            rs.getString("assigned"), String.valueOf(rs.getInt("age_days")) });
+                            rs.getString("assigned"), String.valueOf(rs.getInt("age_days")),
+                            String.valueOf(rs.getInt("upvotes")) });
                 }
             }
         }
@@ -467,7 +500,7 @@ public class ComplaintService {
                     + "WHERE actor.user_id = ? AND actor.role = 'STAFF' "
                     + "AND actor.department_id = c.department_id) ";
         } else if ("STUDENT".equals(account.role)) {
-            accessFilter = "AND c.user_id = ? AND EXISTS "
+            accessFilter = "AND c.status <> 'REJECTED' AND EXISTS "
                     + "(SELECT 1 FROM users student WHERE student.user_id = ? AND student.role = 'STUDENT') ";
         } else {
             throw new IllegalArgumentException("This account cannot view complaint details.");
@@ -476,6 +509,7 @@ public class ComplaintService {
                 + "u.name AS student, d.department_name, "
                 + "COALESCE(a.name, CONCAT(global_admin.name, ' (Global admin)'), '-') AS assigned, c.created_at, "
                 + "DATEDIFF(CURRENT_DATE, DATE(c.created_at)) AS age_days, "
+                + "COALESCE(votes.upvotes, 0) AS upvotes, "
                 + "cf.rating AS feedback_rating, cf.feedback_comment "
                 + "FROM complaints c JOIN users u ON u.user_id = c.user_id "
                 + "JOIN departments d ON d.department_id = c.department_id "
@@ -483,12 +517,17 @@ public class ComplaintService {
                 + "LEFT JOIN users global_admin ON global_admin.user_id = "
                 + "(SELECT MIN(admin.user_id) FROM users admin WHERE admin.role = 'ADMIN') "
                 + "LEFT JOIN complaint_feedback cf ON cf.complaint_id = c.complaint_id "
+                + "LEFT JOIN (SELECT complaint_id, COUNT(*) AS upvotes FROM complaint_votes GROUP BY complaint_id) votes "
+                + "ON votes.complaint_id = c.complaint_id "
                 + "WHERE c.complaint_id = ? " + accessFilter;
         try (Connection con = DatabaseConnection.getConnection();
              PreparedStatement ps = con.prepareStatement(sql)) {
             ps.setInt(1, complaintId);
             ps.setInt(2, account.userId);
-            if (!"ADMIN".equals(account.role)) ps.setInt(3, account.userId);
+            if ("STAFF".equals(account.role)) {
+                ps.setInt(3, account.userId);
+            }
+
             ComplaintDetails details;
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) {
@@ -508,6 +547,80 @@ public class ComplaintService {
                 }
             }
             return details;
+        }
+    }
+
+    /** Adds one student support vote and promotes an open report at each five-vote milestone. */
+    public int upvoteComplaint(int complaintId, UserAccount student) throws SQLException {
+        if (student == null || !"STUDENT".equals(student.role)) {
+            throw new IllegalArgumentException("Only a student can upvote a complaint.");
+        }
+        try (Connection con = DatabaseConnection.getConnection()) {
+            con.setAutoCommit(false);
+            try {
+                String currentPriority;
+                try (PreparedStatement ps = con.prepareStatement(
+                        "SELECT c.status, c.priority FROM complaints c WHERE c.complaint_id = ? FOR UPDATE")) {
+                    ps.setInt(1, complaintId);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (!rs.next()) throw new IllegalArgumentException("Complaint not found.");
+                        if ("RESOLVED".equals(rs.getString("status"))
+                                || "REJECTED".equals(rs.getString("status"))) {
+                            throw new IllegalArgumentException("Closed complaints cannot be upvoted.");
+                        }
+                        currentPriority = rs.getString("priority");
+                    }
+                }
+                try (PreparedStatement ps = con.prepareStatement(
+                        "SELECT complaint_id FROM complaint_votes WHERE complaint_id = ? AND user_id = ?")) {
+                    ps.setInt(1, complaintId);
+                    ps.setInt(2, student.userId);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (rs.next()) throw new IllegalArgumentException("You have already upvoted this complaint.");
+                    }
+                }
+                try (PreparedStatement ps = con.prepareStatement(
+                        "INSERT INTO complaint_votes (complaint_id, user_id) VALUES (?, ?)")) {
+                    ps.setInt(1, complaintId);
+                    ps.setInt(2, student.userId);
+                    ps.executeUpdate();
+                }
+                int votes;
+                try (PreparedStatement ps = con.prepareStatement(
+                        "SELECT COUNT(*) FROM complaint_votes WHERE complaint_id = ?")) {
+                    ps.setInt(1, complaintId);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        rs.next();
+                        votes = rs.getInt(1);
+                    }
+                }
+                if (votes % 5 == 0) {
+                    String promotedPriority = promotePriority(currentPriority);
+                    if (!promotedPriority.equals(currentPriority)) {
+                        try (PreparedStatement ps = con.prepareStatement(
+                                "UPDATE complaints SET priority = ? WHERE complaint_id = ?")) {
+                            ps.setString(1, promotedPriority);
+                            ps.setInt(2, complaintId);
+                            ps.executeUpdate();
+                        }
+                    }
+                }
+                con.commit();
+                return votes;
+            } catch (SQLException | RuntimeException e) {
+                con.rollback();
+                throw e;
+            }
+        }
+
+    }
+
+    static String promotePriority(String priority) {
+        switch (priority) {
+            case "LOW": return "MEDIUM";
+            case "MEDIUM": return "HIGH";
+            case "HIGH": return "URGENT";
+            default: return "URGENT";
         }
     }
 

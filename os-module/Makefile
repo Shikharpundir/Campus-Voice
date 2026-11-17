@@ -4,7 +4,7 @@
 # -O0 keeps the race-condition experiment honest (no optimizer tricks).
 
 CC      = gcc
-SRC     = main.c process_management.c scheduling.c synchronization.c deadlock.c
+SRC     = main.c process_management.c scheduling.c synchronization.c bounded_buffer.c deadlock.c
 CFLAGS  = -Wall -Wextra -std=c11 -O0 -g
 
 ifeq ($(OS),Windows_NT)

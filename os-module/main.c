@@ -26,6 +26,7 @@ static void usage(void)
         "      input: pid complaint_id arrival burst priority [aging_days] ('#' = comment)\n"
         "  campusvoice_os sync                 (threads WITH mutex)\n"
         "  campusvoice_os race                 (threads WITHOUT mutex)\n"
+        "  campusvoice_os buffer               (bounded buffer producer/consumer)\n"
         "  campusvoice_os deadlock <1|2|stdin> (1 = no deadlock, 2 = deadlock)\n");
 }
 
@@ -100,6 +101,7 @@ int main(int argc, char **argv)
     if (strcmp(argv[1], "sched") == 0)    return cmd_sched(argc, argv);
     if (strcmp(argv[1], "sync") == 0)     return run_sync_demo(1, SYNC_ITERATIONS) == 0 ? 0 : 2;
     if (strcmp(argv[1], "race") == 0)     return run_sync_demo(0, SYNC_ITERATIONS) == 0 ? 0 : 2;
+    if (strcmp(argv[1], "buffer") == 0)   return run_bounded_buffer_demo() == 0 ? 0 : 2;
     if (strcmp(argv[1], "deadlock") == 0) return cmd_deadlock(argc, argv);
 
     usage();

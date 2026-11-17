@@ -58,12 +58,15 @@ public final class CampusVoiceDAO {
     public List<String[]> getComplaintsForAdmin(int adminId) throws SQLException {
         String sql = "SELECT c.complaint_id, c.title, c.priority, c.status, u.name AS student, "
                 + "d.department_name, COALESCE(a.name, CONCAT(global_admin.name, ' (Global admin)'), '-') AS assigned, "
+                + "COALESCE(v.vote_count, 0) AS upvotes, "
                 + "DATEDIFF(CURRENT_DATE, DATE(c.created_at)) AS age_days "
                 + "FROM complaints c JOIN users u ON u.user_id = c.user_id "
                 + "JOIN departments d ON d.department_id = c.department_id "
                 + "LEFT JOIN users a ON a.user_id = c.assigned_to "
                 + "LEFT JOIN users global_admin ON global_admin.user_id = "
                 + "(SELECT MIN(idle_admin.user_id) FROM users idle_admin WHERE idle_admin.role = 'ADMIN') "
+                + "LEFT JOIN (SELECT complaint_id, COUNT(*) AS vote_count FROM complaint_votes GROUP BY complaint_id) v "
+                + "ON v.complaint_id = c.complaint_id "
                 + "WHERE EXISTS (SELECT 1 FROM users actor WHERE actor.user_id = ? "
                 + "AND actor.role = 'ADMIN' AND actor.department_id IS NULL) "
                 + "ORDER BY c.complaint_id";
@@ -73,10 +76,13 @@ public final class CampusVoiceDAO {
     public List<String[]> getComplaintsForStaff(int staffId) throws SQLException {
         String sql = "SELECT c.complaint_id, c.title, c.priority, c.status, u.name AS student, "
                 + "d.department_name, COALESCE(a.name, '-') AS assigned, "
+                + "COALESCE(v.vote_count, 0) AS upvotes, "
                 + "DATEDIFF(CURRENT_DATE, DATE(c.created_at)) AS age_days "
                 + "FROM complaints c JOIN users u ON u.user_id = c.user_id "
                 + "JOIN departments d ON d.department_id = c.department_id "
                 + "JOIN users a ON a.user_id = c.assigned_to "
+                + "LEFT JOIN (SELECT complaint_id, COUNT(*) AS vote_count FROM complaint_votes GROUP BY complaint_id) v "
+                + "ON v.complaint_id = c.complaint_id "
                 + "WHERE c.assigned_to = ? AND a.role = 'STAFF' AND a.department_id = c.department_id "
                 + "ORDER BY c.complaint_id";
         return queryComplaintRows(sql, staffId);
@@ -93,7 +99,8 @@ public final class CampusVoiceDAO {
                             String.valueOf(rs.getInt("complaint_id")), rs.getString("title"),
                             rs.getString("priority"), rs.getString("status"),
                             rs.getString("student"), rs.getString("department_name"),
-                            rs.getString("assigned"), String.valueOf(rs.getInt("age_days")) });
+                            rs.getString("assigned"), String.valueOf(rs.getInt("age_days")),
+                            String.valueOf(rs.getInt("upvotes")) });
                 }
             }
         }
@@ -125,6 +132,7 @@ public final class CampusVoiceDAO {
     private List<String[]> queryComplaintsByDepartment(String dept) throws SQLException {
         String sql = "SELECT c.complaint_id, c.title, c.priority, c.status, u.name AS student, "
                 + "d.department_name, COALESCE(a.name, CONCAT(global_admin.name, ' (Global admin)'), '-') AS assigned, "
+                + "COALESCE(v.vote_count, 0) AS upvotes, "
                 + "DATEDIFF(CURRENT_DATE, DATE(c.created_at)) AS age_days "
                 + "FROM complaints c "
                 + "JOIN users u ON u.user_id = c.user_id "
@@ -132,6 +140,8 @@ public final class CampusVoiceDAO {
                 + "LEFT JOIN users a ON a.user_id = c.assigned_to "
                 + "LEFT JOIN users global_admin ON global_admin.user_id = "
                 + "(SELECT MIN(admin.user_id) FROM users admin WHERE admin.role = 'ADMIN') "
+                + "LEFT JOIN (SELECT complaint_id, COUNT(*) AS vote_count FROM complaint_votes GROUP BY complaint_id) v "
+                + "ON v.complaint_id = c.complaint_id "
                 + "WHERE d.department_name = ? "
                 + "ORDER BY c.complaint_id";
         List<String[]> rows = new ArrayList<>();
@@ -144,7 +154,8 @@ public final class CampusVoiceDAO {
                             String.valueOf(rs.getInt("complaint_id")), rs.getString("title"),
                             rs.getString("priority"), rs.getString("status"),
                             rs.getString("student"), rs.getString("department_name"),
-                            rs.getString("assigned"), String.valueOf(rs.getInt("age_days")) });
+                            rs.getString("assigned"), String.valueOf(rs.getInt("age_days")),
+                            String.valueOf(rs.getInt("upvotes")) });
                 }
             }
         }

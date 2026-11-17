@@ -59,6 +59,7 @@ void run_scheduler(ProcessTable *table, SchedAlgo algo);
 
 /* synchronization.c */
 int run_sync_demo(int use_mutex, int iterations_per_thread);
+int run_bounded_buffer_demo(void);
 
 /* deadlock.c */
 typedef struct {
